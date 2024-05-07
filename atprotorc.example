@@ -1,0 +1,9 @@
+# atprotorc to be stored in $HOME/.config/atproto
+
+# Identity:
+ATP_HANDLE=fautset.de
+ATP_PASSWORD=****-****-****-**** #AliceBlue
+
+# PDS/API:
+ATP_XRPC=https://userdir.de/xrpc
+ATP_COLLECTION=app.bsky.feed.post

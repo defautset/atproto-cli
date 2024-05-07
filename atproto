@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+
+### DEPENDENCIES ###
+
+curl=$(type -p curl) || exit
+jq=$(type -p jq  ) || exit
+
+(type -p echo && type -p printf && type -p cat) >/dev/null || exit
+(type -p cut && type -p rev) >/dev/null || exit
+
+function curl() {
+  $curl -fsSL "$@"
+}
+
+function jq() {
+  $jq "$@"
+}
+
+### ATProto ###
+
+function atproto() {
+
+usage=$(cat <<USAGE
+The AT Protocol
+
+ $(basename $0)
+ $(basename $0) ping
+ $(basename $0) whoami
+ $(basename $0) create <TEXT>
+ $(basename $0) read <RKEY>
+ $(basename $0) delete <RKEY>
+
+USAGE
+)
+
+  ATP_XRPC=${ATP_XRPC-https://public.api.bsky.app/xrpc}
+  ATP_COLLECTION=${ATP_COLLECTION-app.bsky.feed.post}
+
+  function atp.ping() {
+
+    json=$(curl ${ATP_XRPC}/_health) || exit
+    printf "pong with this version: %s\n" $(echo $json | jq -r .version)
+  }
+
+  # Create an authentication session:
+  function atp.server.createSession() {
+
+    _d="{ \"identifier\": \"${ATP_HANDLE}\", \"password\": \"${ATP_PASSWORD}\" }"
+
+    json=$(curl -X POST "$ATP_XRPC/com.atproto.server.createSession" -d "$_d" \
+                -H 'Content-Type: application/json') || exit
+
+    echo $json
+  }
+
+  # Create a single new repository record:
+  function atp.repo.createRecord() {
+
+    _a="$@"
+    _d="{\"repo\": \"${ATP_HANDLE}\", \"collection\": \"${ATP_COLLECTION}\", \"record\": {\"text\": \"${_a}\", \"createdAt\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}"
+
+    _t=$(atp.server.createSession | jq -r .accessJwt) || exit
+
+    json=$(curl -X POST "$ATP_XRPC/com.atproto.repo.createRecord" -d "$_d" \
+                -H 'Content-Type: application/json' \
+                -H "Authorization: Bearer $_t") || exit
+
+    rkey=$(echo $json | jq -r .uri | rev | cut -d '/' -f 1 | rev)
+
+    echo && echo $rkey: && echo
+    atp.repo.getRecord $rkey && echo
+  }
+
+  # Get a single record from a repository:
+  function atp.repo.getRecord() {
+
+    json=$(curl "$ATP_XRPC/com.atproto.repo.getRecord?repo=${ATP_HANDLE}&collection=${ATP_COLLECTION}&rkey=${1}") || exit
+    echo $json | jq '.value | { text, createdAt }'
+  }
+
+  # Write a repository record, creating or updating it as needed:
+  #function atp.repo.putRecord() {
+  #}
+
+  # Delete a repository record, or ensure it doesn't exist:
+  function atp.repo.deleteRecord() {
+
+    _d="{\"repo\": \"${ATP_HANDLE}\", \"collection\": \"${ATP_COLLECTION}\", \"rkey\": \"$1\"}"
+
+    _t=$(atp.server.createSession | jq -r .accessJwt) || exit
+
+    curl -X POST "$ATP_XRPC/com.atproto.repo.deleteRecord" -d "$_d" \
+         -H 'Content-Type: application/json' \
+         -H "Authorization: Bearer $_t" || exit
+  }
+
+  case $1 in
+    ping)
+      atp.ping
+      ;;
+    whoami)
+      atp.server.createSession | jq -c '. | {handle,email}'
+      ;;
+    create)
+      shift
+      atp.repo.createRecord $@
+      ;;
+    read)
+      shift
+      atp.repo.getRecord $1
+      ;;
+    delete)
+      shift
+      atp.repo.deleteRecord $1
+      ;;
+    *)
+      IFS=
+      echo $usage
+      ;;
+  esac
+}
+
+if !(return 0 2>/dev/null)
+ then
+  atp=atproto
+
+  prefix=~
+  config=.config/$atp
+
+  if [ ! -s $prefix/$config/${atp}rc ]
+   then
+    umask 077 && mkdir -p $prefix/$config || exit
+
+(cat << CONFIG
+# ${atp}rc to be stored in \$HOME/$config
+
+# Identity:
+ATP_HANDLE=
+ATP_PASSWORD=
+
+# PDS/API:
+#ATP_XRPC=https://userdir.de/xrpc
+
+CONFIG
+) > $prefix/$config/${atp}rc
+
+  fi
+
+  [ -s $prefix/$config/${atp}rc ] || exit
+  . $prefix/$config/${atp}rc
+
+  $atp "$@"
+fi
